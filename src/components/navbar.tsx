@@ -33,7 +33,7 @@ export default function Navbar() {
                     height={100}
                     className='size-10'
                 />
-                <h1 className='font-bold text-[22px]'>logocatch</h1>
+                <h1 className='font-bold text-[22px] hidden sm:block text-primary'>logocat</h1>
             </Link>
             <div className='ml-auto flex items-center gap-2'>
                 <a href="https://qubydev.vercel.app/" target="_blank" rel="noopener noreferrer" className='hover:scale-110 transition-all duration-300'>
