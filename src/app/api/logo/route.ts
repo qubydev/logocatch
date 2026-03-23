@@ -3,9 +3,6 @@ import { z } from "zod";
 import { fetchLogo } from "@/lib/extractor";
 import { auth } from "@/auth";
 import { headers } from "next/headers";
-import { db } from "@/db";
-import { credits } from "@/db/schema";
-import { eq } from "drizzle-orm";
 import { chargeCredits, updateCredits } from "@/lib/helpers";
 
 const RequestSchema = z.object({
@@ -14,6 +11,7 @@ const RequestSchema = z.object({
 
 type ApiResponse = {
     logo: string | null;
+    source: string | null;
     error: string | null;
 };
 
@@ -22,65 +20,60 @@ export const POST = async (request: NextRequest) => {
         const session = await auth.api.getSession({
             headers: await headers()
         });
+
         if (!session) {
             return NextResponse.json<ApiResponse>(
-                { logo: null, error: "Unauthorized" },
+                { logo: null, source: null, error: "Unauthorized" },
                 { status: 401 }
             );
         }
 
         const body = await request.json();
 
+        if (typeof body.url === 'string' && !body.url.startsWith('http')) {
+            body.url = `https://${body.url}`;
+        }
+
         const parsed = RequestSchema.safeParse(body);
 
         if (!parsed.success) {
             return NextResponse.json<ApiResponse>(
-                {
-                    logo: null,
-                    error: parsed.error.issues[0].message,
-                },
+                { logo: null, source: null, error: parsed.error.issues[0].message },
                 { status: 400 }
             );
         }
 
-        // Check credits
-        const credits = await updateCredits(session.user.id);
-        if (credits <= 0) {
+        const userCredits = await updateCredits(session.user.id);
+
+        if (userCredits <= 0) {
             return NextResponse.json<ApiResponse>(
-                { logo: null, error: "Insufficient credits" },
+                { logo: null, source: null, error: "Insufficient credits" },
                 { status: 402 }
             );
         }
 
         const { url } = parsed.data;
-        const { success, logo, error } = await fetchLogo(url);
+        const { success, logo, source, error } = await fetchLogo(url);
 
-        if (success) {
-            const chargedCredits = await chargeCredits(session.user.id, credits);
-
-            return NextResponse.json<ApiResponse>({
-                logo,
-                error: null,
-            });
-        } else {
+        if (!success) {
             return NextResponse.json<ApiResponse>(
-                {
-                    logo: null,
-                    error: error || "Failed to fetch logo",
-                },
-                { status: 500 }
+                { logo: null, source: null, error: error || "Failed to fetch logo" },
+                { status: 404 }
             );
         }
+
+        await chargeCredits(session.user.id, userCredits);
+
+        return NextResponse.json<ApiResponse>({ logo, source, error: null });
     } catch (err) {
         if (err instanceof SyntaxError) {
             return NextResponse.json<ApiResponse>(
-                { logo: null, error: "Invalid request" },
+                { logo: null, source: null, error: "Invalid request" },
                 { status: 400 }
             );
         }
-
         return NextResponse.json<ApiResponse>(
-            { logo: null, error: "Something went wrong, please try again" },
+            { logo: null, source: null, error: "Something went wrong, please try again" },
             { status: 500 }
         );
     }

@@ -97,13 +97,24 @@ export default function Home() {
   const handleDownload = async () => {
     if (!logo) return;
     try {
-      const response = await fetch(logo);
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
+      let blobUrl: string;
+      const hostname = new URL(url.startsWith('http') ? url : `https://${url}`).hostname.replace('www.', '');
+
+      if (logo.startsWith('data:')) {
+        const [header, base64] = logo.split(',');
+        const mime = header.match(/:(.*?);/)?.[1] ?? 'image/svg+xml';
+        const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+        const blob = new Blob([bytes], { type: mime });
+        blobUrl = URL.createObjectURL(blob);
+      } else {
+        const response = await fetch(logo);
+        const blob = await response.blob();
+        blobUrl = URL.createObjectURL(blob);
+      }
+
+      const ext = logo.startsWith('data:image/svg') ? 'svg' : logo.split('.').pop()?.split('?')[0] ?? 'png';
       const a = document.createElement('a');
       a.href = blobUrl;
-      const ext = blob.type.split('/')[1] || 'png';
-      const hostname = new URL(url).hostname.replace('www.', '');
       a.download = `${hostname}-logo.${ext}`;
       document.body.appendChild(a);
       a.click();
