@@ -27,14 +27,11 @@ export default function Footer() {
                     <div className='flex flex-wrap items-center gap-3 justify-end pr-8'>
                         <p className='text-sm'>2026 logocat &copy; All rights reserved.</p>
                         <div className='flex items-center gap-2'>
-                            <a href="https://qubydev.vercel.app/" target="_blank" rel="noopener noreferrer" className='hover:scale-110 transition-all duration-300'>
-                                <Image src="/site.svg" alt="Portfolio" width={100} height={100} className='size-6' />
+                            <a href="mailto:malay77patra@gmail.com" target="_blank" rel="noopener noreferrer" className='hover:scale-110 transition-all duration-300'>
+                                <Image src="/email.svg" alt="Email" width={100} height={100} className='size-6' />
                             </a>
                             <a href="https://github.com/qubydev" target="_blank" rel="noopener noreferrer" className='hover:scale-110 transition-all duration-300'>
                                 <Image src="/github.svg" alt="GitHub" width={100} height={100} className='size-6' />
-                            </a>
-                            <a href="https://linkedin.com/in/qubydev" target="_blank" rel="noopener noreferrer" className='hover:scale-110 transition-all duration-300'>
-                                <Image src="/linkedin.svg" alt="LinkedIn" width={100} height={100} className='size-6' />
                             </a>
                         </div>
                     </div>
