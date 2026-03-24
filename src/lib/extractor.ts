@@ -3,410 +3,301 @@ import * as cheerio from 'cheerio';
 import { extractLogo } from './llm';
 import { USER_AGENTS } from '@/lib/constant';
 
+// --- Logger Utility ---
+const log = (message: string) => {
+    console.log(`[LogoExtractor] ${message}`);
+};
+
 const getHeaders = () => ({
     'User-Agent': USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Cache-Control': 'no-cache',
-    'Pragma': 'no-cache',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none',
-    'Sec-Fetch-User': '?1',
-    'Upgrade-Insecure-Requests': '1',
 });
 
-const BANNER_KEYWORDS = ['ogimage', 'og-image', 'blogheader', 'newsletter', 'social', 'banner', 'hero', 'cover', 'thumbnail'];
-
-const isBanner = (url: string): boolean => {
-    const lower = url.toLowerCase();
-    return BANNER_KEYWORDS.some((kw) => lower.includes(kw));
+const isBanner = (url: string) => {
+    const keywords = ['ogimage', 'og-image', 'blogheader', 'newsletter', 'social', 'banner', 'hero', 'cover'];
+    return keywords.some((kw) => url.toLowerCase().includes(kw));
 };
 
-const toAbsolute = (href: string, homePage: string): string => {
+const toAbsolute = (href: string, homePage: string) => {
     if (!href) return '';
     if (href.startsWith('http') || href.startsWith('data:')) return href;
     return `${homePage}${href.startsWith('/') ? '' : '/'}${href}`;
 };
 
-type LogoResult = { logo: string; source: string } | null;
+// --- 1. Logo.dev API ---
+const checkLogoDev = async (hostname: string) => {
+    // return null;
 
-// --- Strategy 1: JSON-LD ---
-const fetchLogoFromJsonLd = ($: cheerio.CheerioAPI): LogoResult => {
-    const scripts = $('script[type="application/ld+json"]');
-    if (!scripts.length) return null;
+    log(`Strategy 1: Checking logo.dev Search API for ${hostname}...`);
+    const apiKey = process.env.LOGO_DEV_API_KEY;
+    if (!apiKey) {
+        log(`Strategy 1 Skipped: LOGO_DEV_API_KEY is missing.`);
+        return null;
+    }
 
-    for (const el of scripts.toArray()) {
+    const url = `https://api.logo.dev/search?q=${hostname}`;
+    try {
+        const res = await axios.get(url, {
+            timeout: 5000,
+            headers: {
+                Authorization: `Bearer ${apiKey}`
+            }
+        });
+
+        const results = res.data;
+        if (Array.isArray(results) && results.length > 0) {
+            const exactMatch = results.find((r: any) => r.domain === hostname) || results[0];
+
+            if (exactMatch && exactMatch.logo_url) {
+                log(`Strategy 1 Success: Found valid logo via logo.dev API.`);
+                return { logo: exactMatch.logo_url, source: 'logo.dev' };
+            }
+        }
+
+        log(`Strategy 1 Miss: logo.dev Search API returned no matches.`);
+        return null;
+    } catch (err: any) {
+        log(`Strategy 1 Failed: API request error - ${err.response?.status || err.message}`);
+        return null;
+    }
+};
+
+// --- 2. HTML Meta & Schema Checks ---
+const extractFromMeta = ($: cheerio.CheerioAPI, homePage: string) => {
+    log(`Strategy 2: Parsing JSON-LD and Schema.org microdata...`);
+
+    const scripts = $('script[type="application/ld+json"]').toArray();
+    for (const el of scripts) {
         try {
-            const json = JSON.parse($(el).html() ?? '');
+            const json = JSON.parse($(el).html() ?? '{}');
             const items = Array.isArray(json) ? json : [json];
             for (const item of items) {
-                if (item.logo) {
-                    const logo = typeof item.logo === 'string' ? item.logo : item.logo?.url;
-                    if (logo && !isBanner(logo)) return { logo, source: 'json-ld' };
+                const logo = typeof item.logo === 'string' ? item.logo : item.logo?.url;
+                if (logo && !isBanner(logo)) {
+                    log(`Strategy 2 Success: Found logo in JSON-LD script tag.`);
+                    return { logo: toAbsolute(logo, homePage), source: 'json-ld' };
                 }
             }
-        } catch (_) { }
+        } catch { }
     }
+
+    const metaLogo = $('img[itemprop="logo"]').attr('src') || $('meta[itemprop="logo"]').attr('content');
+    if (metaLogo && !isBanner(metaLogo)) {
+        log(`Strategy 2 Success: Found logo in Schema itemprop.`);
+        return { logo: toAbsolute(metaLogo, homePage), source: 'schema-microdata' };
+    }
+
+    log(`Strategy 2 Failed: No logo found in Meta/Schema.`);
     return null;
 };
 
-// --- Strategy 2: Schema.org microdata ---
-const fetchLogoFromSchemaOrgMicrodata = ($: cheerio.CheerioAPI, homePage: string): LogoResult => {
-    const imgSrc = $('img[itemprop="logo"]').first().attr('src');
-    if (imgSrc) {
-        const logo = toAbsolute(imgSrc, homePage);
-        if (logo && !isBanner(logo)) return { logo, source: 'schema-microdata-img' };
-    }
+// --- 3. HTML DOM Elements ---
+const extractFromDOM = ($: cheerio.CheerioAPI, homePage: string) => {
 
-    const metaContent = $('meta[itemprop="logo"]').first().attr('content')
-        ?? $('link[itemprop="logo"]').first().attr('href');
-    if (metaContent) {
-        const logo = toAbsolute(metaContent, homePage);
-        if (logo && !isBanner(logo)) return { logo, source: 'schema-microdata-meta' };
-    }
-
-    return null;
-};
-
-// --- Strategy 3: Logo attributes (class/id/alt) ---
-const fetchLogoFromLogoAttributes = ($: cheerio.CheerioAPI, homePage: string): LogoResult => {
     const selectors = [
-        'img[class*="logo" i]',
-        'img[id*="logo" i]',
-        'img[alt*="logo" i]',
-        'a[class*="logo" i] img',
-        'a[id*="logo" i] img',
-        'div[class*="logo" i] img',
-        'div[id*="logo" i] img',
+        'header a[href="/"] img',
+        'nav a[href="/"] img',
+        '.header a[href="/"] img',
+        '.navbar a[href="/"] img',
+        'header img[class*="logo" i]',
+        'nav img[class*="logo" i]',
+        'header img[alt*="logo" i]',
+        'a[class*="brand" i] img',
+        'a[class*="logo" i] img'
     ];
 
     for (const selector of selectors) {
         const el = $(selector).first();
-        const src = el.attr('src') ?? '';
-        if (!src) continue;
-        const logo = toAbsolute(src, homePage);
-        if (logo && !isBanner(logo)) return { logo, source: `logo-attribute:${selector}` };
+        const src = el.attr('src') || el.attr('data-src');
+
+        if (src && !isBanner(src)) {
+            return { logo: toAbsolute(src, homePage), source: `dom:${selector}` };
+        }
+    }
+
+    const iconHref = $('link[rel="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]').first().attr('href');
+    if (iconHref) {
+        return { logo: toAbsolute(iconHref, homePage), source: 'favicon' };
     }
 
     return null;
 };
 
-// --- Strategy 4: Inline SVG ---
-const fetchLogoFromInlineSvg = ($: cheerio.CheerioAPI): LogoResult => {
-    const svgEl = $('[class*="logo" i] svg, [id*="logo" i] svg, a[href="/"] svg').first();
-    if (!svgEl.length) return null;
-
-    const svgHtml = $.html(svgEl);
-    if (!svgHtml) return null;
-
-    const hasViewBox = svgEl.attr('viewBox') ?? svgEl.attr('viewbox');
-    if (!hasViewBox) return null;
-
-    const viewBoxParts = hasViewBox.split(/[\s,]+/).map(Number);
-    if (viewBoxParts.length === 4) {
-        const [, , w, h] = viewBoxParts;
-        if (h > 0 && w / h < 1.2) return null;
-        if (w < 40 || h < 10) return null;
-    }
-
-    const logo = `data:image/svg+xml;base64,${Buffer.from(svgHtml).toString('base64')}`;
-    return { logo, source: 'inline-svg' };
-};
-
-// --- Strategy 5: SVG favicon ---
-const fetchLogoFromSvgFavicon = ($: cheerio.CheerioAPI, homePage: string): LogoResult => {
-    const href = $('link[rel="icon"], link[rel="shortcut icon"]')
-        .filter((_, el) => {
-            const h = $(el).attr('href') ?? '';
-            const type = $(el).attr('type') ?? '';
-            return type === 'image/svg+xml' || h.endsWith('.svg');
-        })
-        .first()
-        .attr('href');
-
-    if (!href) return null;
-    const logo = toAbsolute(href, homePage);
-    return { logo, source: 'svg-favicon' };
-};
-
-// --- Strategy 6: mask-icon ---
-const fetchLogoFromMaskIcon = ($: cheerio.CheerioAPI, homePage: string): LogoResult => {
-    const href = $('link[rel="mask-icon"]').first().attr('href');
-    if (!href) return null;
-    const logo = toAbsolute(href, homePage);
-    return { logo, source: 'mask-icon' };
-};
-
-// --- Strategy 7: Apple touch icon ---
-const fetchLogoFromAppleTouchIcon = ($: cheerio.CheerioAPI, homePage: string): LogoResult => {
-    const href = $('link[rel="apple-touch-icon"], link[rel="apple-touch-icon-precomposed"]')
-        .first()
-        .attr('href');
-    if (!href) return null;
-    const logo = toAbsolute(href, homePage);
-    return { logo, source: 'apple-touch-icon' };
-};
-
-// --- Strategy 8: Web App Manifest ---
-const fetchLogoFromWebManifest = async ($: cheerio.CheerioAPI, homePage: string): Promise<LogoResult> => {
+// --- 4. Web Manifest ---
+const checkManifest = async ($: cheerio.CheerioAPI, homePage: string) => {
+    log(`Strategy 4: Checking for Web App Manifest...`);
     const manifestHref = $('link[rel="manifest"]').first().attr('href');
-    if (!manifestHref) return null;
+    if (!manifestHref) {
+        log(`Strategy 4 Skipped: No <link rel="manifest"> found in head.`);
+        return null;
+    }
 
-    const manifestUrl = toAbsolute(manifestHref, homePage);
     try {
-        const { data } = await axios.get(manifestUrl, {
-            timeout: 8000,
-            headers: getHeaders(),
-        });
-        const icons: { src: string; sizes?: string; purpose?: string }[] = data?.icons ?? [];
-        if (!icons.length) return null;
+        const { data } = await axios.get(toAbsolute(manifestHref, homePage), { timeout: 5000, headers: getHeaders() });
+        const bestIcon = data?.icons?.sort((a: any, b: any) => (b.sizes || '').localeCompare(a.sizes || ''))[0];
+        if (bestIcon?.src) {
+            log(`Strategy 4 Success: Found highest resolution icon in manifest.json`);
+            return { logo: toAbsolute(bestIcon.src, homePage), source: 'web-manifest' };
+        }
+    } catch (err: any) {
+        log(`Strategy 4 Failed: Could not fetch or parse manifest.json (${err.message})`);
+    }
 
-        const sorted = icons
-            .filter((i) => !i.purpose || i.purpose.includes('any'))
-            .sort((a, b) => {
-                const sizeA = parseInt((a.sizes ?? '0x0').split('x')[0], 10);
-                const sizeB = parseInt((b.sizes ?? '0x0').split('x')[0], 10);
-                return sizeB - sizeA;
+    log(`Strategy 4 Failed: Manifest found, but contained no valid icons.`);
+    return null;
+};
+
+// --- 5. AI Fallback ---
+const askAI = async ($: cheerio.CheerioAPI, homePage: string) => {
+    const candidates: any[] = [];
+    const svgMap = new Map<string, string>();
+
+    $('img').each((i, el) => {
+        if (candidates.length >= 50) return false;
+        const src = toAbsolute($(el).attr('src') || '', homePage);
+        if (src && !isBanner(src)) {
+            candidates.push({
+                type: 'img',
+                src,
+                alt: $(el).attr('alt') || '',
+                class: $(el).attr('class') || '',
+                id: $(el).attr('id') || '',
+                parentTag: $(el).parent().prop('tagName')?.toLowerCase() || ''
             });
+        }
+    });
 
-        const best = sorted[0];
-        if (!best) return null;
+    $('svg').each((i, el) => {
+        if (candidates.length >= 80) return false;
 
-        const logo = toAbsolute(best.src, homePage);
-        return { logo, source: 'web-manifest' };
-    } catch (_) {
+        const svgId = `inline-svg-${i}`;
+        const title = $(el).find('title').text() || $(el).attr('aria-label') || '';
+        const viewBox = $(el).attr('viewBox') || '';
+
+        candidates.push({
+            type: 'svg',
+            src: svgId,
+            alt: title,
+            class: $(el).attr('class') || '',
+            id: $(el).attr('id') || '',
+            viewBox,
+            parentTag: $(el).parent().prop('tagName')?.toLowerCase() || ''
+        });
+
+        svgMap.set(svgId, $.html(el));
+    });
+
+    if (!candidates.length) {
         return null;
     }
-};
 
-// --- Strategy 9: WordPress REST API ---
-const fetchLogoFromWordPress = async (homePage: string): Promise<LogoResult> => {
     try {
-        const { data: settings } = await axios.get(`${homePage}/wp-json/v2/settings`, {
-            timeout: 8000,
-            headers: getHeaders(),
-            validateStatus: (s) => s === 200,
-        });
-
-        const logoId = settings?.site_logo ?? settings?.custom_logo;
-        if (!logoId) return null;
-
-        const { data: media } = await axios.get(`${homePage}/wp-json/v2/media/${logoId}`, {
-            timeout: 8000,
-            headers: getHeaders(),
-            validateStatus: (s) => s === 200,
-        });
-
-        const logo = media?.source_url ?? media?.guid?.rendered;
-        if (!logo) return null;
-
-        return { logo, source: 'wordpress-api' };
-    } catch (_) {
-        return null;
-    }
-};
-
-// --- Strategy 10: Common well-known paths ---
-const fetchLogoFromCommonPaths = async (homePage: string): Promise<LogoResult> => {
-    const paths = [
-        '/logo.svg', '/logo.png', '/logo.webp',
-        '/images/logo.svg', '/images/logo.png',
-        '/assets/logo.svg', '/assets/logo.png',
-        '/img/logo.svg', '/img/logo.png',
-        '/static/logo.svg', '/static/logo.png',
-        '/public/logo.svg', '/public/logo.png',
-        '/brand/logo.svg', '/brand/logo.png',
-        '/favicon.svg',
-    ];
-
-    const results = await Promise.all(
-        paths.map(async (path) => {
-            const url = `${homePage}${path}`;
-            try {
-                const response = await axios.head(url, {
-                    timeout: 8000,
-                    headers: getHeaders(),
-                    validateStatus: () => true,
-                });
-                const contentType = response.headers['content-type'] ?? '';
-                return response.status === 200 && contentType.startsWith('image/') ? url : null;
-            } catch (_) {
-                return null;
+        const result = await extractLogo(candidates);
+        if (result && result !== 'null') {
+            if (result.startsWith('inline-svg-')) {
+                const rawSvg = svgMap.get(result);
+                if (rawSvg) {
+                    const base64Svg = Buffer.from(rawSvg).toString('base64');
+                    return {
+                        logo: `data:image/svg+xml;base64,${base64Svg}`,
+                        source: 'ai-inline-svg'
+                    };
+                }
             }
-        })
-    );
+            return { logo: result, source: 'ai' };
+        }
+    } catch (err: any) {
+        console.error(err.message);
+    }
 
-    const logo = results.find(Boolean) ?? null;
-    return logo ? { logo, source: 'common-path' } : null;
+    return null;
 };
 
-// --- Strategy 11: logo.dev ---
-const fetchLogoFromLogoDev = async (hostname: string): Promise<LogoResult> => {
-    const apiKey = process.env.LOGO_DEV_API_KEY;
-    if (!apiKey) return null;
-
-    const url = `https://img.logo.dev/${hostname}?token=${apiKey}`;
+const fetchHTML = async (url: string) => {
     try {
-        const response = await axios.head(url, {
-            timeout: 8000,
-            validateStatus: () => true,
+        const apiKey = process.env.SCRAPERAPI_KEY;
+        if (!apiKey) {
+            console.log(`fetchHTML Skipped: SCRAPERAPI_KEY is missing.`);
+            return null;
+        }
+
+        const res = await axios.get('https://api.scraperapi.com/', {
+            params: {
+                api_key: apiKey,
+                url: url
+            },
+            timeout: 60000
         });
-        if (response.status === 200) {
-            return { logo: url, source: 'logo.dev' };
-        }
-    } catch (_) { }
-    return null;
-};
 
-// --- Strategy 12: AI fallback ---
-const logoLikelihoodScore = (src: string, alt: string, cls: string, id: string, parentTag: string): number => {
-    let score = 0;
-    const combined = `${src} ${alt} ${cls} ${id}`.toLowerCase();
+        return res.data;
 
-    if (combined.includes('logo')) score += 10;
-    if (combined.includes('brand')) score += 6;
-    if (combined.includes('wordmark')) score += 8;
-    if (['header', 'nav'].includes(parentTag)) score += 5;
-    if (src.endsWith('.svg') || src.includes('.svg?')) score += 6;
-    if (combined.includes('banner')) score -= 8;
-    if (combined.includes('hero')) score -= 6;
-    if (combined.includes('background')) score -= 5;
-    if (combined.includes('avatar') || combined.includes('profile') || combined.includes('user')) score -= 4;
-    if (combined.includes('icon') && !combined.includes('logo')) score -= 2;
-    if (src.startsWith('data:')) score -= 3;
-
-    return score;
-};
-
-const fetchLogoFromAi = async ($: cheerio.CheerioAPI, homePage: string): Promise<LogoResult> => {
-    type ImageCandidate = { src: string; alt: string; class: string; id: string; parentTag: string; score: number };
-
-    const seen = new Set<string>();
-    const candidates: ImageCandidate[] = [];
-
-    $('img').each((_, el) => {
-        const src = $(el).attr('src') ?? '';
-        if (!src) return;
-        const absoluteSrc = toAbsolute(src, homePage);
-        if (!absoluteSrc || seen.has(absoluteSrc)) return;
-        seen.add(absoluteSrc);
-
-        const alt = $(el).attr('alt') ?? '';
-        const cls = $(el).attr('class') ?? '';
-        const id = $(el).attr('id') ?? '';
-        const parentTag = $(el).parent().prop('tagName')?.toLowerCase() ?? '';
-        const score = logoLikelihoodScore(absoluteSrc, alt, cls, id, parentTag);
-
-        candidates.push({ src: absoluteSrc, alt, class: cls, id, parentTag, score });
-    });
-
-    candidates.sort((a, b) => b.score - a.score);
-    if (!candidates.length) return null;
-
-    const payload = candidates.slice(0, 100).map(({ src, alt, class: cls, id, parentTag }) => ({
-        src, alt, class: cls, id, parentTag,
-    }));
-
-    const result = await extractLogo(payload);
-    if (result && result !== 'null') {
-        return { logo: result, source: 'ai' };
+    } catch (err: any) {
+        const apiError = err.response?.data || err.message;
+        console.log(`fetchHTML Error: ${apiError}`);
+        return null;
     }
-    return null;
 };
 
-// --- Race helper ---
-const raceFirst = (promises: Promise<LogoResult>[]): Promise<LogoResult> => {
-    return new Promise((resolve) => {
-        let settled = 0;
-        const total = promises.length;
-        if (total === 0) { resolve(null); return; }
-
-        promises.forEach((p) =>
-            p.then((result) => {
-                if (result) resolve(result);
-                else if (++settled === total) resolve(null);
-            }).catch(() => {
-                if (++settled === total) resolve(null);
-            })
-        );
-    });
-};
-
-// --- Main ---
-export const fetchLogo = async (
-    link: string
-): Promise<{ success: boolean; logo: string | null; source: string | null; error: string | null }> => {
-    let url: URL;
+// --- Main Execution ---
+export const fetchLogo = async (link: string) => {
+    log(`--- Starting Extraction for: ${link} ---`);
     try {
-        url = new URL(link.startsWith('http') ? link : `https://${link}`);
-    } catch (_) {
-        return { success: false, logo: null, source: null, error: 'Invalid URL' };
-    }
-
-    if (!url.hostname.includes('.')) {
-        return { success: false, logo: null, source: null, error: 'Invalid URL' };
-    }
-
-    try {
+        const url = new URL(link.startsWith('http') ? link : `https://${link}`);
+        if (!url.hostname.includes('.')) throw new Error('Invalid URL structure');
         const homePage = `${url.protocol}//${url.hostname}`;
-        const safe = (p: Promise<LogoResult>): Promise<LogoResult> => p.catch(() => null);
 
-        let $: cheerio.CheerioAPI | null = null;
+        // 1
+        const apiLogo = await checkLogoDev(url.hostname);
+        if (apiLogo) return { success: true, ...apiLogo, error: null };
 
-        try {
-            const { data: html } = await axios.get(homePage, {
-                timeout: 15000,
-                headers: getHeaders(),
-            });
-            $ = cheerio.load(html);
-        } catch (_) { }
+        log(`Fetching HTML via ScraperAPI for ${homePage}...`);
+        const html = await fetchHTML(homePage);
+        if (!html) {
+            log(`Failed to fetch HTML content from ${homePage}.`);
+            return { success: false, logo: null, source: null, error: 'Could not retrieve website content. It might be blocking our requests.' };
+        }
+        const $ = cheerio.load(html);
+        log(`Successfully fetched and parsed HTML.`);
 
-        if ($) {
-            const syncResult =
-                fetchLogoFromJsonLd($) ??
-                fetchLogoFromSchemaOrgMicrodata($, homePage) ??
-                fetchLogoFromLogoAttributes($, homePage) ??
-                fetchLogoFromInlineSvg($) ??
-                fetchLogoFromSvgFavicon($, homePage) ??
-                fetchLogoFromMaskIcon($, homePage) ??
-                fetchLogoFromAppleTouchIcon($, homePage) ??
-                null;
+        // 2
+        const metaLogo = extractFromMeta($, homePage);
+        if (metaLogo) return { success: true, ...metaLogo, error: null };
 
-            if (syncResult) return { success: true, logo: syncResult.logo, source: syncResult.source, error: null };
+        // 3
+        const domLogo = extractFromDOM($, homePage);
+        if (domLogo) return { success: true, ...domLogo, error: null };
+
+        // 4
+        const manifestLogo = await checkManifest($, homePage);
+        if (manifestLogo) return { success: true, ...manifestLogo, error: null };
+
+        // 5
+        const aiLogo = await askAI($, homePage);
+        if (aiLogo) return { success: true, ...aiLogo, error: null };
+
+        log(`Extraction Complete: All strategies exhausted. No logo found.`);
+        return { success: false, logo: null, source: null, error: 'We couldn\'t find a logo for this website.' };
+
+    } catch (err: any) {
+        log(`Fatal Error: ${err.message} ${err.code ? `(${err.code})` : ''}`);
+
+        let userFriendlyError = 'An unexpected error occurred while looking for the logo.';
+
+        if (err.message === 'Invalid URL structure') {
+            userFriendlyError = 'Please enter a valid website URL.';
+        } else if (err.code === 'ENOTFOUND') {
+            userFriendlyError = 'Website not found. Please check if the domain is spelled correctly.';
+        } else if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
+            userFriendlyError = 'The website took too long to respond. It might be offline.';
+        } else if (err.code === 'ECONNREFUSED') {
+            userFriendlyError = 'The website refused our connection attempt.';
+        } else if (err.response?.status) {
+            userFriendlyError = `The website is currently unavailable or blocking access (HTTP ${err.response.status}).`;
+        } else {
+            userFriendlyError = 'Could not reach the website. It might be blocking our scraper.';
         }
 
-        const asyncStrategies: Promise<LogoResult>[] = [
-            safe(fetchLogoFromLogoDev(url.hostname)),
-            safe(fetchLogoFromCommonPaths(homePage)),
-            ...($
-                ? [
-                    safe(fetchLogoFromWebManifest($, homePage)),
-                    safe(fetchLogoFromWordPress(homePage)),
-                ]
-                : []
-            ),
-        ];
-
-        const asyncResult = await raceFirst(asyncStrategies);
-        if (asyncResult) return { success: true, logo: asyncResult.logo, source: asyncResult.source, error: null };
-
-        if ($) {
-            const result = await fetchLogoFromAi($, homePage);
-            if (result) return { success: true, logo: result.logo, source: result.source, error: null };
-        }
-
-        return { success: false, logo: null, source: null, error: 'No logo found.' };
-    } catch (err) {
-        if (axios.isAxiosError(err)) {
-            return {
-                success: false,
-                logo: null,
-                source: null,
-                error: `Something went wrong!${err.response?.status ? ` [${err.response?.status}]` : ''}`,
-            };
-        }
-        return { success: false, logo: null, source: null, error: (err as Error).message };
+        return { success: false, logo: null, source: null, error: userFriendlyError };
     }
 };
