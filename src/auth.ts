@@ -26,7 +26,8 @@ export const auth = betterAuth({
                     await db.insert(credits).values({
                         id: generateId(),
                         userId: user.id,
-                        balance: FREE_CREDITS,
+                        freeCredits: FREE_CREDITS,
+                        paidCredits: 0,
                     });
                 },
             },

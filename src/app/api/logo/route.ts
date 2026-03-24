@@ -30,7 +30,7 @@ export const POST = async (request: NextRequest) => {
 
         const body = await request.json();
 
-        if (typeof body.url === 'string' && !body.url.startsWith('http')) {
+        if (typeof body.url === "string" && !body.url.startsWith("http")) {
             body.url = `https://${body.url}`;
         }
 
@@ -43,9 +43,10 @@ export const POST = async (request: NextRequest) => {
             );
         }
 
-        const userCredits = await updateCredits(session.user.id);
+        const credits = await updateCredits(session.user.id);
+        const totalCredits = credits.freeCredits + credits.paidCredits;
 
-        if (userCredits <= 0) {
+        if (totalCredits <= 0) {
             return NextResponse.json<ApiResponse>(
                 { logo: null, source: null, error: "Insufficient credits" },
                 { status: 402 }
@@ -62,16 +63,24 @@ export const POST = async (request: NextRequest) => {
             );
         }
 
-        await chargeCredits(session.user.id, userCredits);
+        await chargeCredits(session.user.id);
 
-        return NextResponse.json<ApiResponse>({ logo, source, error: null });
+        return NextResponse.json<ApiResponse>({
+            logo,
+            source,
+            error: null,
+        });
+
     } catch (err) {
+        console.log("Error in /api/logo:", err);
+
         if (err instanceof SyntaxError) {
             return NextResponse.json<ApiResponse>(
                 { logo: null, source: null, error: "Invalid request" },
                 { status: 400 }
             );
         }
+
         return NextResponse.json<ApiResponse>(
             { logo: null, source: null, error: "Something went wrong, please try again" },
             { status: 500 }

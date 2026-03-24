@@ -94,6 +94,7 @@ const extractFromMeta = ($: cheerio.CheerioAPI, homePage: string) => {
 
 // --- 3. HTML DOM Elements ---
 const extractFromDOM = ($: cheerio.CheerioAPI, homePage: string) => {
+    log("Strategy 3: Checking the common logo paths...");
 
     const selectors = [
         'header a[href="/"] img',
@@ -112,12 +113,14 @@ const extractFromDOM = ($: cheerio.CheerioAPI, homePage: string) => {
         const src = el.attr('src') || el.attr('data-src');
 
         if (src && !isBanner(src)) {
+            log(`Strategy 3 Success: Found logo at ${src}`);
             return { logo: toAbsolute(src, homePage), source: `dom:${selector}` };
         }
     }
 
     const iconHref = $('link[rel="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]').first().attr('href');
     if (iconHref) {
+        log(`Strategy 3 Success: Found logo from faviocn`);
         return { logo: toAbsolute(iconHref, homePage), source: 'favicon' };
     }
 
@@ -241,46 +244,39 @@ const fetchHTML = async (url: string) => {
 
 // --- Main Execution ---
 export const fetchLogo = async (link: string) => {
-    log(`--- Starting Extraction for: ${link} ---`);
     try {
         const url = new URL(link.startsWith('http') ? link : `https://${link}`);
         if (!url.hostname.includes('.')) throw new Error('Invalid URL structure');
         const homePage = `${url.protocol}//${url.hostname}`;
 
-        // 1
-        const apiLogo = await checkLogoDev(url.hostname);
+        const logoDevPromise = checkLogoDev(url.hostname);
+        const htmlPromise = fetchHTML(homePage);
+
+        const apiLogo = await logoDevPromise;
         if (apiLogo) return { success: true, ...apiLogo, error: null };
 
-        log(`Fetching HTML via ScraperAPI for ${homePage}...`);
-        const html = await fetchHTML(homePage);
+        const html = await htmlPromise;
         if (!html) {
-            log(`Failed to fetch HTML content from ${homePage}.`);
             return { success: false, logo: null, source: null, error: 'Could not retrieve website content. It might be blocking our requests.' };
         }
-        const $ = cheerio.load(html);
-        log(`Successfully fetched and parsed HTML.`);
 
-        // 2
+        const $ = cheerio.load(html);
+
         const metaLogo = extractFromMeta($, homePage);
         if (metaLogo) return { success: true, ...metaLogo, error: null };
 
-        // 3
         const domLogo = extractFromDOM($, homePage);
         if (domLogo) return { success: true, ...domLogo, error: null };
 
-        // 4
         const manifestLogo = await checkManifest($, homePage);
         if (manifestLogo) return { success: true, ...manifestLogo, error: null };
 
-        // 5
         const aiLogo = await askAI($, homePage);
         if (aiLogo) return { success: true, ...aiLogo, error: null };
 
-        log(`Extraction Complete: All strategies exhausted. No logo found.`);
         return { success: false, logo: null, source: null, error: 'We couldn\'t find a logo for this website.' };
 
     } catch (err: any) {
-        log(`Fatal Error: ${err.message} ${err.code ? `(${err.code})` : ''}`);
 
         let userFriendlyError = 'An unexpected error occurred while looking for the logo.';
 

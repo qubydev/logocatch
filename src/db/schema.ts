@@ -75,13 +75,22 @@ export const verification = pgTable(
 
 export const credits = pgTable("credits", {
   id: text("id").primaryKey(),
+
   userId: text("user_id")
     .notNull()
     .unique()
     .references(() => user.id, { onDelete: "cascade" }),
-  balance: integer("balance").notNull().default(0),
-  lastResetAt: timestamp("last_reset_at", { withTimezone: true }).defaultNow().notNull(),
+
+  freeCredits: integer("free_credits").notNull().default(10),
+
+  paidCredits: integer("paid_credits").notNull().default(0),
+
+  lastResetAt: timestamp("last_reset_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+
   createdAt: timestamp("created_at").defaultNow().notNull(),
+
   updatedAt: timestamp("updated_at")
     .defaultNow()
     .$onUpdate(() => new Date())

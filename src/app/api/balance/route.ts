@@ -8,6 +8,7 @@ export const GET = async (request: NextRequest) => {
         const session = await auth.api.getSession({
             headers: await headers()
         });
+
         if (!session) {
             return NextResponse.json(
                 { balance: null, error: "Unauthorized" },
@@ -16,7 +17,10 @@ export const GET = async (request: NextRequest) => {
         }
 
         const credits = await updateCredits(session.user.id);
-        return NextResponse.json({ balance: credits });
+
+        return NextResponse.json({
+            balance: credits.freeCredits + credits.paidCredits,
+        });
 
     } catch (error) {
         return NextResponse.json(

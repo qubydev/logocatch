@@ -1,6 +1,5 @@
 "use client";
 
-import { motion, Variants } from "framer-motion";
 import Image from "next/image";
 import { FaArrowRight } from "react-icons/fa6";
 
@@ -25,21 +24,6 @@ const steps = [
     },
 ];
 
-const containerVariants: Variants = {
-    hidden: { opacity: 0 },
-    visible: {
-        opacity: 1,
-        transition: {
-            staggerChildren: 0.15,
-        },
-    },
-};
-
-const itemVariants: Variants = {
-    hidden: { opacity: 0, y: 20 },
-    visible: { opacity: 1, y: 0, transition: { duration: 0.6, ease: "easeOut" } },
-};
-
 export default function HowItWorks() {
     return (
         <section className="py-24 w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -49,21 +33,14 @@ export default function HowItWorks() {
                 </h2>
 
                 <p className="text-muted-foreground text-lg max-w-2xl">
-                    Our extraction engine uses a multi-layered approach to guarantee we find the right logo, every time.
+                    Our extraction engine uses a multi-layered approach to almost guarantee we find the right logo.
                 </p>
             </div>
 
-            <motion.div
-                variants={containerVariants}
-                initial="hidden"
-                whileInView="visible"
-                viewport={{ once: true, margin: "-50px" }}
-                className="grid grid-cols-1 md:grid-cols-3 overflow-hidden rounded-tl-xl rounded-bl-xl md:rounded-bl-none md:rounded-tr-xl"
-            >
+            <div className="grid grid-cols-1 md:grid-cols-3 overflow-hidden rounded-tl-xl rounded-bl-xl md:rounded-bl-none md:rounded-tr-xl">
                 {steps.map((step, index) => (
-                    <motion.div
+                    <div
                         key={index}
-                        variants={itemVariants}
                         className="group relative flex flex-col h-full min-h-[400px] sm:min-h-[480px] p-8 sm:p-10 hover:bg-secondary/20 transition-colors duration-500 cursor-default"
                     >
                         <div className="text-4xl sm:text-5xl font-light text-foreground/30 tracking-tighter">
@@ -71,18 +48,14 @@ export default function HowItWorks() {
                         </div>
 
                         <div className="flex-1 flex items-center justify-center w-full relative py-8">
-                            <motion.div
-                                whileHover={{ scale: 1.08 }}
-                                transition={{ type: "spring", stiffness: 300, damping: 20 }}
-                                className="relative size-32 sm:size-44"
-                            >
+                            <div className="relative size-32 sm:size-44 transition-transform duration-300 hover:scale-110">
                                 <Image
                                     src={step.illustration}
                                     alt={step.title}
                                     fill
                                     className="object-contain opacity-80 group-hover:opacity-100 transition-opacity duration-300 drop-shadow-sm"
                                 />
-                            </motion.div>
+                            </div>
                         </div>
 
                         <div className="mt-auto flex flex-col gap-3">
@@ -97,9 +70,9 @@ export default function HowItWorks() {
                                 {step.description}
                             </p>
                         </div>
-                    </motion.div>
+                    </div>
                 ))}
-            </motion.div>
+            </div>
         </section>
     );
 }

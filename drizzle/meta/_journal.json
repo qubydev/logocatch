@@ -8,6 +8,13 @@
       "when": 1774210007400,
       "tag": "0000_curious_onslaught",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1774366025087,
+      "tag": "0001_volatile_secret_warriors",
+      "breakpoints": true
     }
   ]
 }
